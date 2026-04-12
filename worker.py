@@ -1,9 +1,28 @@
 
-import os, json, asyncio, subprocess
+import os, json, asyncio, time, sys
 from pyrogram import Client
 
 payload = json.loads(os.environ.get("PAYLOAD", "{}"))
 app = Client("worker", api_id=int(os.environ.get("API_ID")), api_hash=os.environ.get("API_HASH"), bot_token=os.environ.get("BOT_TOKEN"))
+
+last_edit_time = 0
+
+def make_progress_bar(current, total):
+    percent = current * 100 / total
+    filled = int(percent / 5)
+    bar = '█' * filled + '░' * (20 - filled)
+    return f"[{bar}] {percent:.1f}%"
+
+async def prog_cb(current, total, msg, action):
+    global last_edit_time
+    if time.time() - last_edit_time > 3:
+        try:
+            curr_mb = current / (1024 * 1024)
+            tot_mb = total / (1024 * 1024)
+            text = f"☁️ **{action}**\n{make_progress_bar(current, total)}\n{curr_mb:.1f} MB / {tot_mb:.1f} MB"
+            await msg.edit_text(text)
+            last_edit_time = time.time()
+        except: pass
 
 async def main():
     await app.start()
@@ -14,16 +33,20 @@ async def main():
     font = payload['font']
     st = payload['settings']
     
-    await app.send_message(chat_id, f"☁️ **GitHub Runner Started!**\nDownloading `{orig_name}`...")
+    status_msg = await app.send_message(chat_id, "☁️ **GitHub Runner Started!**\nPreparing to download...")
     
-    v_path = await app.download_media(vid_id, file_name="vid.tmp")
-    s_path = await app.download_media(sub_id, file_name="sub.srt") if sub_id else None
+    async def dl_prog(c, t): await prog_cb(c, t, status_msg, "Downloading Video...")
+    v_path = await app.download_media(vid_id, file_name="vid.tmp", progress=dl_prog)
+    
+    s_path = None
+    if sub_id:
+        async def sub_prog(c, t): await prog_cb(c, t, status_msg, "Downloading Subtitle...")
+        s_path = await app.download_media(sub_id, file_name="sub.srt", progress=sub_prog)
+        
     out_path = f"out_{orig_name}"
     
     cmd = ['ffmpeg', '-y']
-    if st['threads'] != 'auto':
-        cmd.extend(['-threads', str(st['threads'])])
-    
+    if st['threads'] != 'auto': cmd.extend(['-threads', str(st['threads'])])
     cmd.extend(['-i', v_path])
     
     vf = ""
@@ -51,15 +74,20 @@ async def main():
     cmd.extend(['-c:a', 'copy', out_path])
     
     codec_name = "H.265" if st['codec'] == "libx265" else "H.264"
-    await app.send_message(chat_id, f"🔥 **Encoding on Cloud...**\nCodec: {codec_name} | Preset: {st['preset']} | CRF: {st['crf']}")
-    subprocess.run(cmd)
+    await status_msg.edit_text(f"🔥 **Encoding on Cloud...**\nCodec: {codec_name} | Preset: {st['preset']} | CRF: {st['crf']}")
+    
+    process = await asyncio.create_subprocess_exec(*cmd)
+    await process.communicate()
     
     if os.path.exists(out_path):
-        await app.send_document(chat_id, out_path, caption=f"✅ Cloud Encoded: {orig_name}")
+        async def ul_prog(c, t): await prog_cb(c, t, status_msg, "Uploading Encoded Video...")
+        await app.send_document(chat_id, out_path, caption=f"✅ Cloud Encoded: {orig_name}", progress=ul_prog)
+        await status_msg.delete()
     else:
-        await app.send_message(chat_id, "❌ Encoding Failed on GitHub!")
+        await status_msg.edit_text("❌ Encoding Failed on GitHub!")
         
     await app.stop()
+    sys.exit(0)
 
 asyncio.run(main())
     
