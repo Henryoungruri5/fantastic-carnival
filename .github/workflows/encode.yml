@@ -127,10 +127,28 @@ jobs:
                   await app.stop()
                   return
 
-              if msg_id: await app.edit_message_text(chat_id, msg_id, f"🐙 **GitHub Worker**\n☁️ Uploading `{out_name}`...")
-              await app.send_document(chat_id, out_name, caption=f"✅ GitHub Action Complete!\n📁 `{out_name}`", file_name=out_name, progress=make_prog(app, chat_id, msg_id, "☁️ Uploading", out_name) if msg_id else None)
-              
-              if msg_id: await app.delete_messages(chat_id, msg_id)
+              # Naya Retry System Upload ke liye
+              max_retries = 3
+              for attempt in range(max_retries):
+                  try:
+                      lbl = f"☁️ Uploading `{out_name}`" + (f" (Retry {attempt}/3)..." if attempt > 0 else "...")
+                      if msg_id: await app.edit_message_text(chat_id, msg_id, f"🐙 **GitHub Worker**\n{lbl}")
+                      await app.send_document(chat_id, out_name, caption=f"✅ GitHub Action Complete!\n📁 `{out_name}`", file_name=out_name, progress=make_prog(app, chat_id, msg_id, "☁️ Uploading", out_name) if msg_id else None)
+                      break
+                  except Exception as e:
+                      if attempt < max_retries - 1:
+                          if msg_id:
+                              try: await app.edit_message_text(chat_id, msg_id, f"🐙 **GitHub Worker**\n⚠️ Telegram API Error! Retrying in 5s...\n`{str(e)[:50]}`")
+                              except: pass
+                          await asyncio.sleep(5)
+                      else:
+                          if msg_id:
+                              try: await app.edit_message_text(chat_id, msg_id, f"❌ **GitHub Upload Failed!**\nTelegram Server Issue:\n`{str(e)[:150]}`")
+                              except: pass
+
+              if msg_id: 
+                  try: await app.delete_messages(chat_id, msg_id)
+                  except: pass
               await app.stop()
 
           asyncio.run(main())
