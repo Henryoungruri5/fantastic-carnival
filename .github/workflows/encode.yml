@@ -1,0 +1,49 @@
+name: Encode Video
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: "Direct video download URL"
+        required: true
+      sub_url:
+        description: "Direct subtitle download URL"
+        required: false
+      settings:
+        description: "Encoding settings JSON"
+        required: true
+      chat_id:
+        description: "Telegram chat_id for callback"
+        required: true
+      task_id:
+        description: "Task ID"
+        required: true
+      bot_token:
+        description: "Bot Token for upload"
+        required: true
+
+jobs:
+  encode:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Download Files
+        run: |
+          wget -O input.mp4 "${{ inputs.video_url }}"
+          if [ -n "${{ inputs.sub_url }}" ]; then
+            wget -O sub.srt "${{ inputs.sub_url }}"
+          fi
+      - name: Encode
+        run: |
+          if [ -n "${{ inputs.sub_url }}" ]; then
+            ffmpeg -i input.mp4 -vf "subtitles=sub.srt" -c:v libx264 -preset fast -crf 23 -c:a copy output.mkv
+          else
+            ffmpeg -i input.mp4 -c:v libx264 -preset fast -crf 23 -c:a copy output.mkv
+          fi
+      - name: Upload to Telegram
+        run: |
+          curl -F "chat_id=${{ inputs.chat_id }}" \
+               -F "document=@output.mkv" \
+               "https://api.telegram.org/bot${{ inputs.bot_token }}/sendDocument"
