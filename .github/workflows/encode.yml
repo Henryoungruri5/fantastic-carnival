@@ -1,0 +1,98 @@
+name: Encode Video
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_msg_id:
+        description: "Video Message ID"
+        required: true
+      sub_msg_id:
+        description: "Subtitle Message ID"
+        required: false
+      settings:
+        description: "Encoding settings JSON"
+        required: true
+      chat_id:
+        description: "Telegram chat_id"
+        required: true
+      task_id:
+        description: "Task ID"
+        required: true
+      bot_token:
+        description: "Bot Token"
+        required: true
+      api_id:
+        description: "API ID"
+        required: true
+      api_hash:
+        description: "API HASH"
+        required: true
+
+jobs:
+  encode:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Install FFmpeg & Python
+        run: |
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+          pip install pyrogram tgcrypto pyaes
+
+      - name: Encode via Pyrogram Worker
+        run: |
+          cat << 'EOF' > worker.py
+          import asyncio, json, os, subprocess
+          from pyrogram import Client
+
+          async def main():
+              app = Client("gh_session", api_id=int("${{ inputs.api_id }}"), api_hash="${{ inputs.api_hash }}", bot_token="${{ inputs.bot_token }}")
+              await app.start()
+              
+              chat_id = int("${{ inputs.chat_id }}")
+              v_id = int("${{ inputs.video_msg_id }}")
+              s_id = "${{ inputs.sub_msg_id }}"
+              settings = json.loads('${{ inputs.settings }}')
+              out_name = settings.get("output", "output.mkv")
+              
+              print("Downloading video from Telegram...")
+              v_msg = await app.get_messages(chat_id, v_id)
+              v_path = await app.download_media(v_msg, file_name="input.mp4")
+              
+              s_path = None
+              if s_id:
+                  print("Downloading subtitle from Telegram...")
+                  s_msg = await app.get_messages(chat_id, int(s_id))
+                  ext = ".srt"
+                  if getattr(s_msg.document, "file_name", ""):
+                      if s_msg.document.file_name.endswith(".ass"): ext = ".ass"
+                      elif s_msg.document.file_name.endswith(".vtt"): ext = ".vtt"
+                  s_path = await app.download_media(s_msg, file_name=f"sub{ext}")
+              
+              vf = []
+              res = settings.get("res", "original")
+              if res != "original":
+                  rmap = {"1080p":"1920:1080", "720p":"1280:720", "480p":"854:480"}
+                  vf.append(f"scale={rmap.get(res, res)}")
+              
+              if s_path:
+                  esc_sub = s_path.replace("\\", "/").replace("'", r"'''").replace(":", r"\:")
+                  vf.append(f"subtitles='{esc_sub}'")
+              
+              cmd = ['ffmpeg', '-y', '-i', v_path]
+              if vf:
+                  cmd += ['-vf', ",".join(vf)]
+              
+              crf = str(settings.get("quality", "23"))
+              preset = settings.get("preset", "fast")
+              cmd += ['-c:v', 'libx264', '-preset', preset, '-crf', crf, '-c:a', 'copy', out_name]
+              
+              print("Executing FFmpeg...")
+              subprocess.run(cmd)
+              
+              print("Uploading back to Telegram...")
+              await app.send_document(chat_id, out_name, caption=f"✅ GitHub Action Complete!\n📁 `{out_name}`", file_name=out_name)
+              await app.stop()
+
+          asyncio.run(main())
+          EOF
+          python worker.py
