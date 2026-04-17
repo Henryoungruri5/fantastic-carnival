@@ -133,7 +133,7 @@ jobs:
                   try:
                       lbl = f"☁️ Uploading `{out_name}`" + (f" (Retry {attempt}/3)..." if attempt > 0 else "...")
                       if msg_id: await app.edit_message_text(chat_id, msg_id, f"🐙 **GitHub Worker**\n{lbl}")
-                      await app.send_document(chat_id, out_name, caption=f"✅ GitHub Action Complete!\n📁 `{out_name}`", file_name=out_name, progress=make_prog(app, chat_id, msg_id, "☁️ Uploading", out_name) if msg_id else None)
+                      await app.send_document(chat_id, out_name, caption=f"✅ **Done!**\n📁 `{out_name}`", file_name=out_name, progress=make_prog(app, chat_id, msg_id, "☁️ Uploading", out_name) if msg_id else None)
                       break
                   except Exception as e:
                       if attempt < max_retries - 1:
