@@ -27,6 +27,9 @@ on:
       api_hash:
         description: "API HASH"
         required: true
+      status_msg_id:
+        description: "Status Message ID"
+        required: false
 
 jobs:
   encode:
@@ -36,13 +39,41 @@ jobs:
       - name: Install FFmpeg & Python
         run: |
           sudo apt-get update && sudo apt-get install -y ffmpeg
-          pip install pyrogram tgcrypto pyaes
+          pip install pyrogram tgcrypto pyaes nest_asyncio
 
       - name: Encode via Pyrogram Worker
         run: |
           cat << 'EOF' > worker.py
-          import asyncio, json, os, subprocess
+          import asyncio, json, os, subprocess, time
+          import nest_asyncio
           from pyrogram import Client
+
+          nest_asyncio.apply()
+
+          def format_size(b):
+              for u in ('B','KB','MB','GB'):
+                  if b < 1024: return f"{b:.1f} {u}"
+                  b /= 1024
+              return f"{b:.1f} TB"
+
+          def make_prog(app, chat_id, msg_id, label, fname):
+              last_t = time.time()
+              start_t = time.time()
+              async def cb(current, total):
+                  nonlocal last_t
+                  now = time.time()
+                  if total and (now - last_t < 2.0) and current < total: return
+                  last_t = now
+                  elap = now - start_t
+                  pct = (current / total * 100) if total else 0
+                  bar_len = 12
+                  filled = int(bar_len * current / total) if total else 0
+                  bar = "█" * filled + "░" * (bar_len - filled)
+                  spd = format_size(current/elap) + "/s" if elap > 0 else "-"
+                  try:
+                      await app.edit_message_text(chat_id, msg_id, f"🐙 **GitHub Worker**\n{label} `{fname}`\n`{bar}` {pct:.1f}%\n⚡ {spd}")
+                  except: pass
+              return cb
 
           async def main():
               app = Client("gh_session", api_id=int("${{ inputs.api_id }}"), api_hash="${{ inputs.api_hash }}", bot_token="${{ inputs.bot_token }}")
@@ -51,22 +82,23 @@ jobs:
               chat_id = int("${{ inputs.chat_id }}")
               v_id = int("${{ inputs.video_msg_id }}")
               s_id = "${{ inputs.sub_msg_id }}"
+              msg_id = int("${{ inputs.status_msg_id }}") if "${{ inputs.status_msg_id }}" else 0
               settings = json.loads('${{ inputs.settings }}')
               out_name = settings.get("output", "output.mkv")
               
-              print("Downloading video from Telegram...")
+              if msg_id: await app.edit_message_text(chat_id, msg_id, f"🐙 **GitHub Worker**\n⬇️ Downloading Video...")
               v_msg = await app.get_messages(chat_id, v_id)
-              v_path = await app.download_media(v_msg, file_name="input.mp4")
+              v_path = await app.download_media(v_msg, file_name="input.mp4", progress=make_prog(app, chat_id, msg_id, "⬇️ Downloading", "video") if msg_id else None)
               
               s_path = None
               if s_id:
-                  print("Downloading subtitle from Telegram...")
+                  if msg_id: await app.edit_message_text(chat_id, msg_id, f"🐙 **GitHub Worker**\n⬇️ Downloading Subtitle...")
                   s_msg = await app.get_messages(chat_id, int(s_id))
                   ext = ".srt"
                   if getattr(s_msg.document, "file_name", ""):
                       if s_msg.document.file_name.endswith(".ass"): ext = ".ass"
                       elif s_msg.document.file_name.endswith(".vtt"): ext = ".vtt"
-                  s_path = await app.download_media(s_msg, file_name=f"sub{ext}")
+                  s_path = await app.download_media(s_msg, file_name=f"sub{ext}", progress=make_prog(app, chat_id, msg_id, "⬇️ Downloading", "subtitle") if msg_id else None)
               
               vf = []
               res = settings.get("res", "original")
@@ -84,13 +116,21 @@ jobs:
               
               crf = str(settings.get("quality", "23"))
               preset = settings.get("preset", "fast")
-              cmd += ['-c:v', 'libx264', '-preset', preset, '-crf', crf, '-c:a', 'copy', out_name]
+              cmd += ['-map', '0:v:0', '-map', '0:a:0?', '-c:v', 'libx264', '-preset', preset, '-crf', crf, '-c:a', 'copy', out_name]
               
-              print("Executing FFmpeg...")
-              subprocess.run(cmd)
+              if msg_id: await app.edit_message_text(chat_id, msg_id, f"🐙 **GitHub Worker**\n⚙️ Encoding Video...\n(Logs Action Tab mein check karein)")
+              res = subprocess.run(cmd, capture_output=True)
               
-              print("Uploading back to Telegram...")
-              await app.send_document(chat_id, out_name, caption=f"✅ GitHub Action Complete!\n📁 `{out_name}`", file_name=out_name)
+              if res.returncode != 0 or not os.path.exists(out_name):
+                  err_msg = res.stderr.decode()[-500:] if res.stderr else "Unknown FFmpeg error"
+                  if msg_id: await app.edit_message_text(chat_id, msg_id, f"❌ **GitHub Encoding Failed!**\n```\n{err_msg}\n```")
+                  await app.stop()
+                  return
+
+              if msg_id: await app.edit_message_text(chat_id, msg_id, f"🐙 **GitHub Worker**\n☁️ Uploading `{out_name}`...")
+              await app.send_document(chat_id, out_name, caption=f"✅ GitHub Action Complete!\n📁 `{out_name}`", file_name=out_name, progress=make_prog(app, chat_id, msg_id, "☁️ Uploading", out_name) if msg_id else None)
+              
+              if msg_id: await app.delete_messages(chat_id, msg_id)
               await app.stop()
 
           asyncio.run(main())
