@@ -103,7 +103,7 @@ jobs:
               vf = []
               res = settings.get("res", "original")
               if res != "original":
-                  rmap = {"1080p":"1920:1080", "720p":"1280:720", "480p":"854:480"}
+                  rmap = {"1080p":"1920:1080", "720p":"1280:720", "480p":"854:480", "360p":"640:360", "240p":"426:240", "144p":"256:144"}
                   vf.append(f"scale={rmap.get(res, res)}")
               
               if s_path:
