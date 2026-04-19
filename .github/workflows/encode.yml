@@ -3,33 +3,16 @@ name: Encode Video
 on:
   workflow_dispatch:
     inputs:
-      video_msg_id:
-        description: "Video Message ID"
-        required: true
-      sub_msg_id:
-        description: "Subtitle Message ID"
-        required: false
-      settings:
-        description: "Encoding settings JSON"
-        required: true
-      chat_id:
-        description: "Telegram chat_id"
-        required: true
-      task_id:
-        description: "Task ID"
-        required: true
-      bot_token:
-        description: "Bot Token"
-        required: true
-      api_id:
-        description: "API ID"
-        required: true
-      api_hash:
-        description: "API HASH"
-        required: true
-      status_msg_id:
-        description: "Status Message ID"
-        required: false
+      video_msg_id: { required: true }
+      sub_msg_id: { required: false }
+      settings: { required: true }
+      chat_id: { required: true }
+      task_id: { required: true }
+      bot_token: { required: true }
+      api_id: { required: true }
+      api_hash: { required: true }
+      status_msg_id: { required: false }
+      mode: { required: true }
 
 jobs:
   encode:
@@ -50,28 +33,16 @@ jobs:
 
           nest_asyncio.apply()
 
-          def format_size(b):
-              for u in ('B','KB','MB','GB'):
-                  if b < 1024: return f"{b:.1f} {u}"
-                  b /= 1024
-              return f"{b:.1f} TB"
-
-          def make_prog(app, chat_id, msg_id, label, fname):
+          def make_prog(app, chat_id, msg_id, label, fname, mode, task_id):
               last_t = time.time()
-              start_t = time.time()
               async def cb(current, total):
                   nonlocal last_t
                   now = time.time()
-                  if total and (now - last_t < 2.0) and current < total: return
+                  if total and (now - last_t < 2.5) and current < total: return
                   last_t = now
-                  elap = now - start_t
                   pct = (current / total * 100) if total else 0
-                  bar_len = 12
-                  filled = int(bar_len * current / total) if total else 0
-                  bar = "█" * filled + "░" * (bar_len - filled)
-                  spd = format_size(current/elap) + "/s" if elap > 0 else "-"
                   try:
-                      await app.edit_message_text(chat_id, msg_id, f"🐙 **GitHub Worker**\n{label} `{fname}`\n`{bar}` {pct:.1f}%\n⚡ {spd}")
+                      await app.edit_message_text(chat_id, msg_id, f"File name:- **{fname}**\n{label.lower()}:- loading {pct:.1f}%\nMode:-{mode}\nFile id :- `{task_id}`")
                   except: pass
               return cb
 
@@ -83,67 +54,56 @@ jobs:
               v_id = int("${{ inputs.video_msg_id }}")
               s_id = "${{ inputs.sub_msg_id }}"
               msg_id = int("${{ inputs.status_msg_id }}") if "${{ inputs.status_msg_id }}" else 0
+              task_id = "${{ inputs.task_id }}"
+              mode = "${{ inputs.mode }}"
               settings = json.loads('${{ inputs.settings }}')
               out_name = settings.get("output", "output.mkv")
               
-              if msg_id: await app.edit_message_text(chat_id, msg_id, f"🐙 **GitHub Worker**\n⬇️ Downloading Video...")
               v_msg = await app.get_messages(chat_id, v_id)
-              v_path = await app.download_media(v_msg, file_name="input.mp4", progress=make_prog(app, chat_id, msg_id, "⬇️ Downloading", "video") if msg_id else None)
+              v_path = await app.download_media(v_msg, file_name="input.mp4", progress=make_prog(app, chat_id, msg_id, "Downloading", out_name, mode, task_id) if msg_id else None)
               
               s_path = None
               if s_id:
-                  if msg_id: await app.edit_message_text(chat_id, msg_id, f"🐙 **GitHub Worker**\n⬇️ Downloading Subtitle...")
                   s_msg = await app.get_messages(chat_id, int(s_id))
                   ext = ".srt"
                   if getattr(s_msg.document, "file_name", ""):
                       if s_msg.document.file_name.endswith(".ass"): ext = ".ass"
                       elif s_msg.document.file_name.endswith(".vtt"): ext = ".vtt"
-                  s_path = await app.download_media(s_msg, file_name=f"sub{ext}", progress=make_prog(app, chat_id, msg_id, "⬇️ Downloading", "subtitle") if msg_id else None)
+                  s_path = await app.download_media(s_msg, file_name=f"sub{ext}", progress=make_prog(app, chat_id, msg_id, "Downloading", out_name, mode, task_id) if msg_id else None)
               
               vf = []
-              res = settings.get("res", "original")
-              if res != "original":
+              res = settings.get("res", "Original")
+              if res == "Original": res = settings.get("cpu_res", "original")
+              if res.lower() != "original":
                   rmap = {"1080p":"1920:1080", "720p":"1280:720", "480p":"854:480", "360p":"640:360", "240p":"426:240", "144p":"256:144"}
-                  vf.append(f"scale={rmap.get(res, res)}")
+                  vf.append(f"scale={rmap.get(res.lower(), res)}")
               
               if s_path:
                   esc_sub = s_path.replace("\\", "/").replace("'", r"'''").replace(":", r"\:")
-                  vf.append(f"subtitles='{esc_sub}'")
+                  font_name = settings.get("font", "Arial")
+                  vf.append(f"subtitles='{esc_sub}':force_style='Fontname={font_name}'")
               
               cmd = ['ffmpeg', '-y', '-i', v_path]
-              if vf:
-                  cmd += ['-vf', ",".join(vf)]
+              if vf: cmd += ['-vf', ",".join(vf)]
               
               crf = str(settings.get("quality", "23"))
               preset = settings.get("preset", "fast")
               cmd += ['-map', '0:v:0', '-map', '0:a:0?', '-c:v', 'libx264', '-preset', preset, '-crf', crf, '-c:a', 'copy', out_name]
               
-              if msg_id: await app.edit_message_text(chat_id, msg_id, f"🐙 **GitHub Worker**\n⚙️ Encoding Video...\n(Logs Action Tab mein check karein)")
+              if msg_id: await app.edit_message_text(chat_id, msg_id, f"File name:- **{out_name}**\nencoding:- loading 0%\nMode:-{mode}\nFile id :- `{task_id}`")
               res = subprocess.run(cmd, capture_output=True)
               
               if res.returncode != 0 or not os.path.exists(out_name):
-                  err_msg = res.stderr.decode()[-500:] if res.stderr else "Unknown FFmpeg error"
-                  if msg_id: await app.edit_message_text(chat_id, msg_id, f"❌ **GitHub Encoding Failed!**\n```\n{err_msg}\n```")
+                  if msg_id: await app.edit_message_text(chat_id, msg_id, f"❌ **GitHub Encoding Failed!**")
                   await app.stop()
                   return
 
-              max_retries = 3
-              for attempt in range(max_retries):
+              for attempt in range(3):
                   try:
-                      lbl = f"☁️ Uploading `{out_name}`" + (f" (Retry {attempt}/3)..." if attempt > 0 else "...")
-                      if msg_id: await app.edit_message_text(chat_id, msg_id, f"🐙 **GitHub Worker**\n{lbl}")
-                      await app.send_document(chat_id, out_name, caption=f"✅ **Done!**\n📁 `{out_name}`", file_name=out_name, progress=make_prog(app, chat_id, msg_id, "☁️ Uploading", out_name) if msg_id else None)
+                      await app.send_document(chat_id, out_name, caption=f"✅ **{out_name}**", file_name=out_name, progress=make_prog(app, chat_id, msg_id, "Uploading", out_name, mode, task_id) if msg_id else None)
                       break
-                  except Exception as e:
-                      if attempt < max_retries - 1:
-                          if msg_id:
-                              try: await app.edit_message_text(chat_id, msg_id, f"🐙 **GitHub Worker**\n⚠️ Telegram API Error! Retrying in 5s...\n`{str(e)[:50]}`")
-                              except: pass
-                          await asyncio.sleep(5)
-                      else:
-                          if msg_id:
-                              try: await app.edit_message_text(chat_id, msg_id, f"❌ **GitHub Upload Failed!**\nTelegram Server Issue:\n`{str(e)[:150]}`")
-                              except: pass
+                  except Exception:
+                      await asyncio.sleep(5)
 
               if msg_id: 
                   try: await app.delete_messages(chat_id, msg_id)
