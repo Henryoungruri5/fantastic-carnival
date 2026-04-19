@@ -27,7 +27,7 @@ jobs:
       - name: Encode via Pyrogram Worker
         run: |
           cat << 'EOF' > worker.py
-          import asyncio, json, os, subprocess, time
+          import asyncio, json, os, subprocess, time, re
           import nest_asyncio
           from pyrogram import Client
 
@@ -42,7 +42,7 @@ jobs:
                   last_t = now
                   pct = (current / total * 100) if total else 0
                   try:
-                      await app.edit_message_text(chat_id, msg_id, f"File name:- **{fname}**\n{label.lower()}:- loading {pct:.1f}%\nMode:-{mode}\nFile id :- `{task_id}`")
+                      await app.edit_message_text(chat_id, msg_id, f"File name:- **{fname}**\n{label.capitalize()} :- loading {pct:.1f}%\nMode:- {mode}\nFile id :- `{task_id}`")
                   except: pass
               return cb
 
@@ -90,7 +90,7 @@ jobs:
               preset = settings.get("preset", "fast")
               cmd += ['-map', '0:v:0', '-map', '0:a:0?', '-c:v', 'libx264', '-preset', preset, '-crf', crf, '-c:a', 'copy', out_name]
               
-              if msg_id: await app.edit_message_text(chat_id, msg_id, f"File name:- **{out_name}**\nencoding:- loading 0%\nMode:-{mode}\nFile id :- `{task_id}`")
+              if msg_id: await app.edit_message_text(chat_id, msg_id, f"File name:- **{out_name}**\nEncoding :- loading 0%\nMode:- {mode}\nFile id :- `{task_id}`")
               res = subprocess.run(cmd, capture_output=True)
               
               if res.returncode != 0 or not os.path.exists(out_name):
