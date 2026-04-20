@@ -26,6 +26,8 @@ jobs:
           pip install pyrogram tgcrypto pyaes nest_asyncio
 
       - name: Encode via Pyrogram Worker
+        env:
+          INPUT_SETTINGS: ${{ inputs.settings }}
         run: |
           cat << 'EOF' > worker.py
           import asyncio, json, os, subprocess, time, re
@@ -87,7 +89,9 @@ jobs:
               task_id = "${{ inputs.task_id }}"
               mode = "${{ inputs.mode }}"
               font_file_id = "${{ inputs.font_file_id }}"
-              settings = json.loads('${{ inputs.settings }}')
+              
+              # Use OS Environment variable to bypass quotes breaking python string literal
+              settings = json.loads(os.environ.get('INPUT_SETTINGS', '{}'))
               out_name = settings.get("output", "output.mkv")
               
               if font_file_id:
@@ -106,6 +110,42 @@ jobs:
               v_msg = await app.get_messages(chat_id, v_id)
               v_path = await app.download_media(v_msg, file_name="input.mp4", progress=make_prog(app, chat_id, msg_id, "Downloading", out_name, mode, task_id) if msg_id else None)
               
+              if mode == 'extractsubs':
+                  if msg_id: await app.edit_message_text(chat_id, msg_id, f"🔍 Subtitles dhoondh raha hoon...\nFile id :- `{task_id}`")
+                  proc = subprocess.run(['ffprobe', '-v', 'error', '-select_streams', 's', '-show_entries', 'stream=index,codec_name,tags', '-of', 'json', v_path], capture_output=True, text=True)
+                  try:
+                      data = json.loads(proc.stdout)
+                      streams = data.get('streams', [])
+                  except: streams = []
+                  
+                  if not streams:
+                      if msg_id: await app.edit_message_text(chat_id, msg_id, f"❌ Koi subtitle track nahi mila: **{out_name}**")
+                      await app.stop()
+                      return
+                  
+                  ext_map = {'subrip': 'srt', 'ass': 'ass', 'webvtt': 'vtt'}
+                  for s in streams:
+                      idx = s.get('index')
+                      codec = s.get('codec_name', 'srt')
+                      tags = s.get('tags') or {}
+                      lang = tags.get('language', f'trk{idx}')
+                      ext = ext_map.get(codec, 'mkv')
+                      
+                      sub_out = f"sub_{idx}_{lang}.{ext}"
+                      subprocess.run(['ffmpeg', '-y', '-i', v_path, '-map', f"0:{idx}", '-c', 'copy', sub_out], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                      if os.path.exists(sub_out):
+                          for attempt in range(3):
+                              try:
+                                  await app.send_document(chat_id, sub_out, caption=f"✅ Extracted Subtitle\n🎬 `{out_name}`\n🏷️ Track: {idx} | Lang: {lang}")
+                                  break
+                              except Exception: await asyncio.sleep(5)
+                  
+                  if msg_id: 
+                      try: await app.delete_messages(chat_id, msg_id)
+                      except: pass
+                  await app.stop()
+                  return
+
               s_path = None
               if s_id:
                   s_msg = await app.get_messages(chat_id, int(s_id))
