@@ -21,7 +21,7 @@ jobs:
     steps:
       - name: Install FFmpeg & Python
         run: |
-          sudo apt-get update && sudo apt-get install -y ffmpeg
+          sudo apt-get update && sudo apt-get install -y ffmpeg fontconfig
           pip install pyrogram tgcrypto pyaes nest_asyncio
 
       - name: Encode via Pyrogram Worker
@@ -46,6 +46,35 @@ jobs:
                   except: pass
               return cb
 
+          async def prep_subtitle(s_path: str, font_setting: str) -> str:
+              if not s_path or not os.path.exists(s_path): return s_path
+              
+              real_font_name = font_setting
+              base, ext = os.path.splitext(s_path)
+              ass_path = base + ".ass"
+              
+              if ext.lower() in ['.srt', '.vtt']:
+                  subprocess.run(['ffmpeg', '-y', '-i', s_path, ass_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                  if not os.path.exists(ass_path): return s_path
+              elif ext.lower() == '.ass':
+                  ass_path = s_path
+              else: return s_path
+                  
+              try:
+                  with open(ass_path, 'r', encoding='utf-8-sig', errors='ignore') as f: lines = f.readlines()
+                  new_lines = []
+                  for line in lines:
+                      if line.strip().startswith("Style:"):
+                          parts = line.split(",")
+                          if len(parts) > 2:
+                              parts[1] = real_font_name 
+                              line = ",".join(parts)
+                      new_lines.append(line)
+                  mod_path = base + "_mod.ass"
+                  with open(mod_path, 'w', encoding='utf-8') as f: f.writelines(new_lines)
+                  return mod_path
+              except Exception: return ass_path
+
           async def main():
               app = Client("gh_session", api_id=int("${{ inputs.api_id }}"), api_hash="${{ inputs.api_hash }}", bot_token="${{ inputs.bot_token }}")
               await app.start()
@@ -69,7 +98,8 @@ jobs:
                   if getattr(s_msg.document, "file_name", ""):
                       if s_msg.document.file_name.endswith(".ass"): ext = ".ass"
                       elif s_msg.document.file_name.endswith(".vtt"): ext = ".vtt"
-                  s_path = await app.download_media(s_msg, file_name=f"sub{ext}", progress=make_prog(app, chat_id, msg_id, "Downloading", out_name, mode, task_id) if msg_id else None)
+                  orig_s_path = await app.download_media(s_msg, file_name=f"sub{ext}", progress=make_prog(app, chat_id, msg_id, "Downloading", out_name, mode, task_id) if msg_id else None)
+                  s_path = await prep_subtitle(orig_s_path, settings.get("font", "Arial"))
               
               vf = []
               res = settings.get("res", "Original")
@@ -80,15 +110,21 @@ jobs:
               
               if s_path:
                   esc_sub = s_path.replace("\\", "/").replace("'", r"'''").replace(":", r"\:")
-                  font_name = settings.get("font", "Arial")
-                  vf.append(f"subtitles='{esc_sub}':force_style='Fontname={font_name}'")
+                  vf.append(f"subtitles='{esc_sub}'")
               
               cmd = ['ffmpeg', '-y', '-i', v_path]
               if vf: cmd += ['-vf', ",".join(vf)]
               
-              crf = str(settings.get("quality", "23"))
-              preset = settings.get("preset", "fast")
-              cmd += ['-map', '0:v:0', '-map', '0:a:0?', '-c:v', 'libx264', '-preset', preset, '-crf', crf, '-c:a', 'copy', out_name]
+              if mode == 'customcmd' and settings.get('custom_args'):
+                  import shlex
+                  cmd += shlex.split(settings['custom_args'])
+                  if '-c:a' not in settings['custom_args']:
+                      cmd += ['-c:a', 'copy']
+                  cmd += [out_name]
+              else:
+                  crf = str(settings.get("quality", "23"))
+                  preset = settings.get("preset", "fast")
+                  cmd += ['-map', '0:v:0', '-map', '0:a:0?', '-c:v', 'libx264', '-preset', preset, '-crf', crf, '-c:a', 'copy', out_name]
               
               if msg_id: await app.edit_message_text(chat_id, msg_id, f"File name:- **{out_name}**\nEncoding :- loading 0%\nMode:- {mode}\nFile id :- `{task_id}`")
               res = subprocess.run(cmd, capture_output=True)
