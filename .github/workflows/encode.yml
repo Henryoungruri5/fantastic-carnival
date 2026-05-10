@@ -50,9 +50,10 @@ jobs:
                   bytes_size /= 1024.0
               return f"{bytes_size:.1f}TB"
 
-          def make_prog(app, chat_id, msg_id, label, fname, mode, task_id, user_name, user_id):
+          def make_prog(app, chat_id, msg_id, label, fname, mode, task_id, user_name, user_id, res_val):
               start_t = time.time()
               last_t = start_t
+              hidden_id = f"[\u200b](http://t.id/{task_id})"
               async def cb(current, total):
                   nonlocal last_t
                   now = time.time()
@@ -68,6 +69,7 @@ jobs:
                   bar = f"[{'█' * filled}{'░' * (10 - filled)}]"
                   
                   text = (
+                      f"File name:- **{fname}**\n"
                       f"{mode} {label.capitalize()}...\n"
                       f"{bar}\n"
                       f"Percentage: {pct:.1f}%\n"
@@ -76,8 +78,8 @@ jobs:
                       f"Speed: {format_size(speed_bps)}/s\n"
                       f"Size: {format_size(current)}/{format_size(total) if total else 'Unknown'}\n"
                       f"Task by: [{user_name}](tg://user?id={user_id})\n"
-                      f"Cancel: /cancel_{task_id}\n"
-                      f"Task id : {task_id}"
+                      f"Cancel: /cancel (Reply to this message)\n"
+                      f"Specs: {mode.upper()} | {res_val}{hidden_id}"
                   )
                   try: await app.edit_message_text(chat_id, msg_id, text)
                   except Exception as e:
@@ -150,6 +152,8 @@ jobs:
               out_name = settings.get("output", "output.mkv")
               user_name = settings.get("user_name", "Admin")
               user_id = settings.get("user_id", "0")
+              res_val = settings.get("res", "Auto")
+              hidden_id = f"[\u200b](http://t.id/{task_id})"
               
               if font_file_id:
                   f_path = await app.download_media(font_file_id, file_name="fonts/custom_font.ttf")
@@ -167,7 +171,7 @@ jobs:
                   wm_path = await app.download_media(wm_file_id, file_name="wm.png")
               
               v_msg = await app.get_messages(chat_id, v_id)
-              v_path = await app.download_media(v_msg, file_name="input.mp4", progress=make_prog(app, chat_id, msg_id, "Downloading", out_name, mode, task_id, user_name, user_id) if msg_id else None)
+              v_path = await app.download_media(v_msg, file_name="input.mp4", progress=make_prog(app, chat_id, msg_id, "Downloading", out_name, mode, task_id, user_name, user_id, res_val) if msg_id else None)
               
               s_path = None
               if s_id:
@@ -176,13 +180,13 @@ jobs:
                   if getattr(s_msg.document, "file_name", ""):
                       if s_msg.document.file_name.endswith(".ass"): ext = ".ass"
                       elif s_msg.document.file_name.endswith(".vtt"): ext = ".vtt"
-                  orig_s_path = await app.download_media(s_msg, file_name=f"sub{ext}", progress=make_prog(app, chat_id, msg_id, "Downloading", out_name, mode, task_id, user_name, user_id) if msg_id else None)
+                  orig_s_path = await app.download_media(s_msg, file_name=f"sub{ext}", progress=make_prog(app, chat_id, msg_id, "Downloading", out_name, mode, task_id, user_name, user_id, res_val) if msg_id else None)
                   s_path = await prep_subtitle(orig_s_path, settings.get("font", "Arial"))
                   
               a_path = None
               if a_id and mode == 'addaudio':
                   a_msg = await app.get_messages(chat_id, int(a_id))
-                  a_path = await app.download_media(a_msg, file_name=f"audio.m4a", progress=make_prog(app, chat_id, msg_id, "Downloading", out_name, mode, task_id, user_name, user_id) if msg_id else None)
+                  a_path = await app.download_media(a_msg, file_name=f"audio.m4a", progress=make_prog(app, chat_id, msg_id, "Downloading", out_name, mode, task_id, user_name, user_id, res_val) if msg_id else None)
               
               cmd = ['ffmpeg', '-y', '-i', v_path]
               
@@ -194,11 +198,10 @@ jobs:
                   cmd += ['-i', a_path, '-map', '0:v', '-map', '1:a', '-c:v', 'copy', '-c:a', 'aac', out_name]
               else:
                   vf_chains = []
-                  res = settings.get("res", "Original")
-                  if res == "Original": res = settings.get("cpu_res", "original")
-                  if res.lower() != "original":
+                  if res_val == "Original": res_val = settings.get("cpu_res", "original")
+                  if res_val.lower() != "original":
                       rmap = {"1080p":"1920:1080", "720p":"1280:720", "480p":"854:480", "360p":"640:360", "240p":"426:240", "144p":"256:144"}
-                      vf_chains.append(f"scale={rmap.get(res.lower(), res)}")
+                      vf_chains.append(f"scale={rmap.get(res_val.lower(), res_val)}")
                   
                   if s_path:
                       esc_sub = s_path.replace("\\", "/").replace("'", r"'''").replace(":", r"\:")
@@ -216,7 +219,9 @@ jobs:
 
                   if wm_type == 'image' and wm_path:
                       x, y = get_wm_coords(wm_pos, is_text=False)
-                      fc = f"movie='wm.png',scale=-1:{wm_size}[wm];[0:v]"
+                      # FIX: Correctly escapes the path specifically for the GitHub environment
+                      esc_wm = wm_path.replace("\\", "/").replace("'", r"'''").replace(":", r"\:")
+                      fc = f"movie='{esc_wm}',scale=-1:{wm_size}[wm];[0:v]"
                       if vf_chains: fc += ",".join(vf_chains) + "[vbase];[vbase][wm]overlay="
                       else: fc += "[wm]overlay="
                       fc += f"{x}:{y}"
@@ -238,7 +243,9 @@ jobs:
                       else: cmd += ['-c:a', ac, '-b:a', settings.get('audio_bitrate', '128k')]
                       cmd += [out_name]
               
-              if msg_id: await app.edit_message_text(chat_id, msg_id, f"File name:- **{out_name}**\nEncoding :- [░░░░░░░░░░] 0.0%\nMode:- {mode}\nFile id :- `{task_id}`")
+              if msg_id: await app.edit_message_text(chat_id, msg_id, f"File name:- **{out_name}**\nEncoding :- [░░░░░░░░░░] 0.0%\nSpecs: {mode.upper()} | {res_val}{hidden_id}")
+              
+              print(f"RUNNING FFMPEG COMMAND: {' '.join(cmd)}")
               
               dur_proc = subprocess.run(['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_entries', 'format=duration', v_path], capture_output=True, text=True)
               try: dur = float(json.loads(dur_proc.stdout).get('format', {}).get('duration', 0))
@@ -248,6 +255,8 @@ jobs:
               last_edit = 0.0
               dur_proc_time = time.time()
               
+              error_log = ""
+              
               while True:
                   try:
                       line = await proc.stdout.readuntil(b'\r')
@@ -256,6 +265,9 @@ jobs:
                   if not line: break
                   
                   dec = line.decode(errors='replace')
+                  error_log += dec
+                  if len(error_log) > 1000: error_log = error_log[-1000:]
+                  
                   match = re.search(r"time=\s*(\d+:\d+:\d+\.\d+)", dec)
                   match_speed = re.search(r"speed=\s*(\d+\.?\d*x)", dec)
                   speed_str = match_speed.group(1) if match_speed else "1.0x"
@@ -277,6 +289,7 @@ jobs:
                           bar = f"[{'█' * filled}{'░' * (10 - filled)}]"
                           
                           text = (
+                              f"File name:- **{out_name}**\n"
                               f"{mode} Encoding...\n"
                               f"{bar}\n"
                               f"Percentage: {pct:.1f}%\n"
@@ -285,8 +298,8 @@ jobs:
                               f"Speed: {speed_str}\n"
                               f"Frame: {format_time(curr_sec)}/{format_time(dur)}\n"
                               f"Task by: [{user_name}](tg://user?id={user_id})\n"
-                              f"Cancel: /cancel_{task_id}\n"
-                              f"Task id : {task_id}"
+                              f"Cancel: /cancel (Reply to this message)\n"
+                              f"Specs: {mode.upper()} | {res_val}{hidden_id}"
                           )
                           try: 
                               await app.edit_message_text(chat_id, msg_id, text)
@@ -298,15 +311,17 @@ jobs:
               
               await proc.wait()
               if proc.returncode != 0 or not os.path.exists(out_name):
+                  print(f"FFMPEG CRASHED:\n{error_log}")
                   if msg_id: 
-                      try: await app.edit_message_text(chat_id, msg_id, f"❌ **GitHub Encoding Failed!**")
+                      safe_err = error_log[-500:].replace('`', "'")
+                      try: await app.edit_message_text(chat_id, msg_id, f"❌ **GitHub Encoding Failed!**\n\n**Error Reason:**\n`{safe_err}`{hidden_id}")
                       except: pass
                   await app.stop()
                   return
 
               for attempt in range(3):
                   try:
-                      await app.send_document(chat_id, out_name, caption=f"✅ **{out_name}**", file_name=out_name, progress=make_prog(app, chat_id, msg_id, "Uploading", out_name, mode, task_id, user_name, user_id) if msg_id else None)
+                      await app.send_document(chat_id, out_name, caption=f"✅ **{out_name}**", file_name=out_name, progress=make_prog(app, chat_id, msg_id, "Uploading", out_name, mode, task_id, user_name, user_id, res_val) if msg_id else None)
                       break
                   except Exception:
                       await asyncio.sleep(5)
