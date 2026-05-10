@@ -219,9 +219,16 @@ jobs:
 
                   if wm_type == 'image' and wm_path:
                       x, y = get_wm_coords(wm_pos, is_text=False)
-                      # FIX: Correctly escapes the path specifically for the GitHub environment
                       esc_wm = wm_path.replace("\\", "/").replace("'", r"'''").replace(":", r"\:")
-                      fc = f"movie='{esc_wm}',scale=-1:{wm_size}[wm];[0:v]"
+                      
+                      if settings.get('wm_rembg'):
+                          ck_c = settings.get('wm_bg_color', '0x000000')
+                          ck_s = settings.get('wm_bg_sim', '0.1')
+                          ck_b = settings.get('wm_bg_blend', '0.1')
+                          fc = f"movie='{esc_wm}',colorkey={ck_c}:{ck_s}:{ck_b},scale=-1:{wm_size}[wm];[0:v]"
+                      else:
+                          fc = f"movie='{esc_wm}',scale=-1:{wm_size}[wm];[0:v]"
+                          
                       if vf_chains: fc += ",".join(vf_chains) + "[vbase];[vbase][wm]overlay="
                       else: fc += "[wm]overlay="
                       fc += f"{x}:{y}"
