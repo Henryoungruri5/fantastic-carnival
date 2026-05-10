@@ -5,6 +5,7 @@ on:
     inputs:
       video_msg_id: { required: true }
       sub_msg_id: { required: false }
+      audio_msg_id: { required: false }
       settings: { required: true }
       chat_id: { required: true }
       task_id: { required: true }
@@ -14,6 +15,7 @@ on:
       status_msg_id: { required: false }
       mode: { required: true }
       font_file_id: { required: false }
+      wm_file_id: { required: false }
 
 jobs:
   encode:
@@ -36,18 +38,48 @@ jobs:
 
           nest_asyncio.apply()
 
-          def make_prog(app, chat_id, msg_id, label, fname, mode, task_id):
-              last_t = time.time()
+          def format_time(seconds):
+              h = int(seconds // 3600)
+              m = int((seconds % 3600) // 60)
+              s = int(seconds % 60)
+              return f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
+
+          def format_size(bytes_size):
+              for unit in ['B', 'KB', 'MB', 'GB']:
+                  if bytes_size < 1024.0: return f"{bytes_size:.1f}{unit}"
+                  bytes_size /= 1024.0
+              return f"{bytes_size:.1f}TB"
+
+          def make_prog(app, chat_id, msg_id, label, fname, mode, task_id, user_name):
+              start_t = time.time()
+              last_t = start_t
               async def cb(current, total):
                   nonlocal last_t
                   now = time.time()
                   if total and (now - last_t < 2.5) and current < total: return
                   last_t = now
+                  
+                  elapsed = now - start_t
+                  speed_bps = current / elapsed if elapsed > 0 else 0
+                  eta = (total - current) / speed_bps if speed_bps > 0 else 0
+                  
                   pct = (current / total * 100) if total else 0
                   filled = int(pct / 10)
                   bar = f"[{'█' * filled}{'░' * (10 - filled)}]"
-                  try:
-                      await app.edit_message_text(chat_id, msg_id, f"File name:- **{fname}**\n{label.capitalize()} :- {bar} {pct:.1f}%\nMode:- {mode}\nFile id :- `{task_id}`")
+                  
+                  text = (
+                      f"{mode} {label.capitalize()}...\n"
+                      f"{bar}\n"
+                      f"Percentage: {pct:.1f}%\n"
+                      f"Time Elapsed: {format_time(elapsed)}\n"
+                      f"Eta: {format_time(eta)}\n"
+                      f"Speed: {format_size(speed_bps)}/s\n"
+                      f"Size: {format_size(current)}/{format_size(total) if total else 'Unknown'}\n"
+                      f"Task by: {user_name}\n"
+                      f"Cancel: /cancel_{task_id}\n"
+                      f"Task id : {task_id}"
+                  )
+                  try: await app.edit_message_text(chat_id, msg_id, text)
                   except Exception as e:
                       err = str(e).lower()
                       if "deleted" in err or "invalid" in err or "not found" in err:
@@ -83,6 +115,23 @@ jobs:
                   return mod_path
               except Exception: return ass_path
 
+          def get_wm_coords(pos, is_text=False):
+              tw = "tw" if is_text else "w"
+              th = "th" if is_text else "h"
+              W = "w" if is_text else "W"
+              H = "h" if is_text else "H"
+              
+              if pos == 'top-left': return "10", "10"
+              if pos == 'top-center': return f"({W}-{tw})/2", "10"
+              if pos == 'top-right': return f"{W}-{tw}-10", "10"
+              if pos == 'center-left': return "10", f"({H}-{th})/2"
+              if pos == 'center': return f"({W}-{tw})/2", f"({H}-{th})/2"
+              if pos == 'center-right': return f"{W}-{tw}-10", f"({H}-{th})/2"
+              if pos == 'bottom-left': return "10", f"{H}-{th}-10"
+              if pos == 'bottom-center': return f"({W}-{tw})/2", f"{H}-{th}-10"
+              if pos == 'bottom-right': return f"{W}-{tw}-10", f"{H}-{th}-10"
+              return "10", "10"
+
           async def main():
               app = Client("gh_session", api_id=int("${{ inputs.api_id }}"), api_hash="${{ inputs.api_hash }}", bot_token="${{ inputs.bot_token }}")
               await app.start()
@@ -90,17 +139,18 @@ jobs:
               chat_id = int("${{ inputs.chat_id }}")
               v_id = int("${{ inputs.video_msg_id }}")
               s_id = "${{ inputs.sub_msg_id }}"
+              a_id = "${{ inputs.audio_msg_id }}"
               msg_id = int("${{ inputs.status_msg_id }}") if "${{ inputs.status_msg_id }}" else 0
               task_id = "${{ inputs.task_id }}"
               mode = "${{ inputs.mode }}"
               font_file_id = "${{ inputs.font_file_id }}"
+              wm_file_id = "${{ inputs.wm_file_id }}"
               
-              # Use OS Environment variable to bypass quotes breaking python string literal
               settings = json.loads(os.environ.get('INPUT_SETTINGS', '{}'))
               out_name = settings.get("output", "output.mkv")
+              user_name = settings.get("user_name", "Admin")
               
               if font_file_id:
-                  if msg_id: await app.edit_message_text(chat_id, msg_id, f"File name:- **{out_name}**\nDownloading Font...\nMode:- {mode}\nFile id :- `{task_id}`")
                   f_path = await app.download_media(font_file_id, file_name="fonts/custom_font.ttf")
                   if f_path:
                       os.makedirs(os.path.expanduser("~/.fonts"), exist_ok=True)
@@ -108,49 +158,16 @@ jobs:
                       try:
                           proc = subprocess.run(['fc-scan', '-f', '%{family}', f_path], capture_output=True, text=True)
                           out_str = proc.stdout.strip()
-                          if out_str:
-                              settings['font'] = out_str.split(',')[0].strip()
+                          if out_str: settings['font'] = out_str.split(',')[0].strip()
                       except: pass
+
+              wm_path = None
+              if wm_file_id and settings.get('wm_type') == 'image':
+                  wm_path = await app.download_media(wm_file_id, file_name="wm.png")
               
               v_msg = await app.get_messages(chat_id, v_id)
-              v_path = await app.download_media(v_msg, file_name="input.mp4", progress=make_prog(app, chat_id, msg_id, "Downloading", out_name, mode, task_id) if msg_id else None)
+              v_path = await app.download_media(v_msg, file_name="input.mp4", progress=make_prog(app, chat_id, msg_id, "Downloading", out_name, mode, task_id, user_name) if msg_id else None)
               
-              if mode == 'extractsubs':
-                  if msg_id: await app.edit_message_text(chat_id, msg_id, f"🔍 Subtitles dhoondh raha hoon...\nFile id :- `{task_id}`")
-                  proc = subprocess.run(['ffprobe', '-v', 'error', '-select_streams', 's', '-show_entries', 'stream=index,codec_name,tags', '-of', 'json', v_path], capture_output=True, text=True)
-                  try:
-                      data = json.loads(proc.stdout)
-                      streams = data.get('streams', [])
-                  except: streams = []
-                  
-                  if not streams:
-                      if msg_id: await app.edit_message_text(chat_id, msg_id, f"❌ Koi subtitle track nahi mila: **{out_name}**")
-                      await app.stop()
-                      return
-                  
-                  ext_map = {'subrip': 'srt', 'ass': 'ass', 'webvtt': 'vtt'}
-                  for s in streams:
-                      idx = s.get('index')
-                      codec = s.get('codec_name', 'srt')
-                      tags = s.get('tags') or {}
-                      lang = tags.get('language', f'trk{idx}')
-                      ext = ext_map.get(codec, 'mkv')
-                      
-                      sub_out = f"sub_{idx}_{lang}.{ext}"
-                      subprocess.run(['ffmpeg', '-y', '-i', v_path, '-map', f"0:{idx}", '-c', 'copy', sub_out], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                      if os.path.exists(sub_out):
-                          for attempt in range(3):
-                              try:
-                                  await app.send_document(chat_id, sub_out, caption=f"✅ Extracted Subtitle\n🎬 `{out_name}`\n🏷️ Track: {idx} | Lang: {lang}")
-                                  break
-                              except Exception: await asyncio.sleep(5)
-                  
-                  if msg_id: 
-                      try: await app.delete_messages(chat_id, msg_id)
-                      except: pass
-                  await app.stop()
-                  return
-
               s_path = None
               if s_id:
                   s_msg = await app.get_messages(chat_id, int(s_id))
@@ -158,35 +175,67 @@ jobs:
                   if getattr(s_msg.document, "file_name", ""):
                       if s_msg.document.file_name.endswith(".ass"): ext = ".ass"
                       elif s_msg.document.file_name.endswith(".vtt"): ext = ".vtt"
-                  orig_s_path = await app.download_media(s_msg, file_name=f"sub{ext}", progress=make_prog(app, chat_id, msg_id, "Downloading", out_name, mode, task_id) if msg_id else None)
+                  orig_s_path = await app.download_media(s_msg, file_name=f"sub{ext}", progress=make_prog(app, chat_id, msg_id, "Downloading", out_name, mode, task_id, user_name) if msg_id else None)
                   s_path = await prep_subtitle(orig_s_path, settings.get("font", "Arial"))
-              
-              vf = []
-              res = settings.get("res", "Original")
-              if res == "Original": res = settings.get("cpu_res", "original")
-              if res.lower() != "original":
-                  rmap = {"1080p":"1920:1080", "720p":"1280:720", "480p":"854:480", "360p":"640:360", "240p":"426:240", "144p":"256:144"}
-                  vf.append(f"scale={rmap.get(res.lower(), res)}")
-              
-              if s_path:
-                  esc_sub = s_path.replace("\\", "/").replace("'", r"'''").replace(":", r"\:")
-                  fonts_dir = os.path.abspath("fonts").replace("\\", "/").replace(":", r"\:") if font_file_id else ""
-                  font_arg = f":fontsdir='{fonts_dir}'" if fonts_dir else ""
-                  vf.append(f"subtitles='{esc_sub}'{font_arg}")
+                  
+              a_path = None
+              if a_id and mode == 'addaudio':
+                  a_msg = await app.get_messages(chat_id, int(a_id))
+                  a_path = await app.download_media(a_msg, file_name=f"audio.m4a", progress=make_prog(app, chat_id, msg_id, "Downloading", out_name, mode, task_id, user_name) if msg_id else None)
               
               cmd = ['ffmpeg', '-y', '-i', v_path]
-              if vf: cmd += ['-vf', ",".join(vf)]
               
-              if mode == 'customcmd' and settings.get('custom_args'):
-                  import shlex
-                  cmd += shlex.split(settings['custom_args'])
-                  if '-c:a' not in settings['custom_args']:
-                      cmd += ['-c:a', 'copy']
-                  cmd += [out_name]
+              if mode == 'removeaudio':
+                  track = settings.get('audio_track', 'all')
+                  if track == 'all': cmd += ['-c', 'copy', '-an', out_name]
+                  else: cmd += ['-map', '0', '-map', f'-0:a:{track}', '-c', 'copy', out_name]
+              elif mode == 'addaudio' and a_path:
+                  cmd += ['-i', a_path, '-map', '0:v', '-map', '1:a', '-c:v', 'copy', '-c:a', 'aac', out_name]
               else:
-                  crf = str(settings.get("quality", "23"))
-                  preset = settings.get("preset", "fast")
-                  cmd += ['-map', '0:v:0', '-map', '0:a:0?', '-c:v', 'libx264', '-preset', preset, '-crf', crf, '-c:a', 'copy', out_name]
+                  vf_chains = []
+                  res = settings.get("res", "Original")
+                  if res == "Original": res = settings.get("cpu_res", "original")
+                  if res.lower() != "original":
+                      rmap = {"1080p":"1920:1080", "720p":"1280:720", "480p":"854:480", "360p":"640:360", "240p":"426:240", "144p":"256:144"}
+                      vf_chains.append(f"scale={rmap.get(res.lower(), res)}")
+                  
+                  if s_path:
+                      esc_sub = s_path.replace("\\", "/").replace("'", r"'''").replace(":", r"\:")
+                      fonts_dir = os.path.abspath("fonts").replace("\\", "/").replace(":", r"\:") if font_file_id else ""
+                      font_arg = f":fontsdir='{fonts_dir}'" if fonts_dir else ""
+                      vf_chains.append(f"subtitles='{esc_sub}'{font_arg}")
+
+                  wm_type = settings.get('wm_type', 'none')
+                  wm_pos = settings.get('wm_pos', 'top-right')
+                  wm_size = settings.get('wm_size', '25')
+                  
+                  if wm_type == 'text' and settings.get('wm_text'):
+                      x, y = get_wm_coords(wm_pos, is_text=True)
+                      vf_chains.append(f"drawtext=text='{settings['wm_text']}':fontsize={wm_size}:fontcolor=white:x={x}:y={y}")
+
+                  if wm_type == 'image' and wm_path:
+                      x, y = get_wm_coords(wm_pos, is_text=False)
+                      fc = f"movie='wm.png',scale=-1:{wm_size}[wm];[0:v]"
+                      if vf_chains: fc += ",".join(vf_chains) + "[vbase];[vbase][wm]overlay="
+                      else: fc += "[wm]overlay="
+                      fc += f"{x}:{y}"
+                      cmd += ['-filter_complex', fc]
+                  else:
+                      if vf_chains: cmd += ['-vf', ",".join(vf_chains)]
+                  
+                  if mode == 'customcmd' and settings.get('custom_args'):
+                      import shlex
+                      cmd += shlex.split(settings['custom_args'])
+                      if '-c:a' not in settings['custom_args']: cmd += ['-c:a', 'copy']
+                      cmd += [out_name]
+                  else:
+                      crf = str(settings.get("quality", "23"))
+                      preset = settings.get("preset", "fast")
+                      ac = settings.get("audio_codec", "copy")
+                      cmd += ['-c:v', 'libx264', '-preset', preset, '-crf', crf]
+                      if ac == 'copy': cmd += ['-c:a', 'copy']
+                      else: cmd += ['-c:a', ac, '-b:a', settings.get('audio_bitrate', '128k')]
+                      cmd += [out_name]
               
               if msg_id: await app.edit_message_text(chat_id, msg_id, f"File name:- **{out_name}**\nEncoding :- [░░░░░░░░░░] 0.0%\nMode:- {mode}\nFile id :- `{task_id}`")
               
@@ -196,6 +245,8 @@ jobs:
 
               proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
               last_edit = 0.0
+              dur_proc_time = time.time()
+              
               while True:
                   try:
                       line = await proc.stdout.readuntil(b'\r')
@@ -205,6 +256,9 @@ jobs:
                   
                   dec = line.decode(errors='replace')
                   match = re.search(r"time=\s*(\d+:\d+:\d+\.\d+)", dec)
+                  match_speed = re.search(r"speed=\s*(\d+\.?\d*x)", dec)
+                  speed_str = match_speed.group(1) if match_speed else "1.0x"
+                  
                   if match and dur > 0 and msg_id:
                       time_str = match.group(1)
                       h, m, s = map(float, time_str.split(':'))
@@ -212,11 +266,29 @@ jobs:
                       now = time.time()
                       if now - last_edit >= 3.0:
                           last_edit = now
+                          
+                          elapsed = now - dur_proc_time
+                          avg_speed = curr_sec / elapsed if elapsed > 0 else 1
+                          eta = (dur - curr_sec) / avg_speed if avg_speed > 0 else 0
+                          
                           pct = min((curr_sec / dur) * 100, 100)
                           filled = int(pct / 10)
                           bar = f"[{'█' * filled}{'░' * (10 - filled)}]"
+                          
+                          text = (
+                              f"{mode} Encoding...\n"
+                              f"{bar}\n"
+                              f"Percentage: {pct:.1f}%\n"
+                              f"Time Elapsed: {format_time(elapsed)}\n"
+                              f"Eta: {format_time(eta)}\n"
+                              f"Speed: {speed_str}\n"
+                              f"Frame: {format_time(curr_sec)}/{format_time(dur)}\n"
+                              f"Task by: {user_name}\n"
+                              f"Cancel: /cancel_{task_id}\n"
+                              f"Task id : {task_id}"
+                          )
                           try: 
-                              await app.edit_message_text(chat_id, msg_id, f"File name:- **{out_name}**\nEncoding :- {bar} {pct:.1f}%\nMode:- {mode}\nFile id :- `{task_id}`")
+                              await app.edit_message_text(chat_id, msg_id, text)
                           except Exception as e:
                               err = str(e).lower()
                               if "deleted" in err or "invalid" in err or "not found" in err:
@@ -233,7 +305,7 @@ jobs:
 
               for attempt in range(3):
                   try:
-                      await app.send_document(chat_id, out_name, caption=f"✅ **{out_name}**", file_name=out_name, progress=make_prog(app, chat_id, msg_id, "Uploading", out_name, mode, task_id) if msg_id else None)
+                      await app.send_document(chat_id, out_name, caption=f"✅ **{out_name}**", file_name=out_name, progress=make_prog(app, chat_id, msg_id, "Uploading", out_name, mode, task_id, user_name) if msg_id else None)
                       break
                   except Exception:
                       await asyncio.sleep(5)
