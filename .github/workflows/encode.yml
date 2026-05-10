@@ -68,6 +68,7 @@ jobs:
                   bar = f"[{'█' * filled}{'░' * (10 - filled)}]"
                   
                   text = (
+                      f"File name:- **{fname}**\n"
                       f"{mode} {label.capitalize()}...\n"
                       f"{bar}\n"
                       f"Percentage: {pct:.1f}%\n"
@@ -277,6 +278,7 @@ jobs:
                           bar = f"[{'█' * filled}{'░' * (10 - filled)}]"
                           
                           text = (
+                              f"File name:- **{out_name}**\n"
                               f"{mode} Encoding...\n"
                               f"{bar}\n"
                               f"Percentage: {pct:.1f}%\n"
