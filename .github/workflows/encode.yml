@@ -51,7 +51,6 @@ jobs:
                   except Exception as e:
                       err = str(e).lower()
                       if "deleted" in err or "invalid" in err or "not found" in err:
-                          import os
                           os._exit(1)
               return cb
 
@@ -222,7 +221,6 @@ jobs:
                               err = str(e).lower()
                               if "deleted" in err or "invalid" in err or "not found" in err:
                                   proc.kill()
-                                  import os
                                   os._exit(1)
               
               await proc.wait()
