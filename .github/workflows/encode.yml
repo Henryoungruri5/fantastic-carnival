@@ -50,7 +50,7 @@ jobs:
                   bytes_size /= 1024.0
               return f"{bytes_size:.1f}TB"
 
-          def make_prog(app, chat_id, msg_id, label, fname, mode, task_id, user_name):
+          def make_prog(app, chat_id, msg_id, label, fname, mode, task_id, user_name, user_id):
               start_t = time.time()
               last_t = start_t
               async def cb(current, total):
@@ -75,7 +75,7 @@ jobs:
                       f"Eta: {format_time(eta)}\n"
                       f"Speed: {format_size(speed_bps)}/s\n"
                       f"Size: {format_size(current)}/{format_size(total) if total else 'Unknown'}\n"
-                      f"Task by: {user_name}\n"
+                      f"Task by: [{user_name}](tg://user?id={user_id})\n"
                       f"Cancel: /cancel_{task_id}\n"
                       f"Task id : {task_id}"
                   )
@@ -149,6 +149,7 @@ jobs:
               settings = json.loads(os.environ.get('INPUT_SETTINGS', '{}'))
               out_name = settings.get("output", "output.mkv")
               user_name = settings.get("user_name", "Admin")
+              user_id = settings.get("user_id", "0")
               
               if font_file_id:
                   f_path = await app.download_media(font_file_id, file_name="fonts/custom_font.ttf")
@@ -166,7 +167,7 @@ jobs:
                   wm_path = await app.download_media(wm_file_id, file_name="wm.png")
               
               v_msg = await app.get_messages(chat_id, v_id)
-              v_path = await app.download_media(v_msg, file_name="input.mp4", progress=make_prog(app, chat_id, msg_id, "Downloading", out_name, mode, task_id, user_name) if msg_id else None)
+              v_path = await app.download_media(v_msg, file_name="input.mp4", progress=make_prog(app, chat_id, msg_id, "Downloading", out_name, mode, task_id, user_name, user_id) if msg_id else None)
               
               s_path = None
               if s_id:
@@ -175,13 +176,13 @@ jobs:
                   if getattr(s_msg.document, "file_name", ""):
                       if s_msg.document.file_name.endswith(".ass"): ext = ".ass"
                       elif s_msg.document.file_name.endswith(".vtt"): ext = ".vtt"
-                  orig_s_path = await app.download_media(s_msg, file_name=f"sub{ext}", progress=make_prog(app, chat_id, msg_id, "Downloading", out_name, mode, task_id, user_name) if msg_id else None)
+                  orig_s_path = await app.download_media(s_msg, file_name=f"sub{ext}", progress=make_prog(app, chat_id, msg_id, "Downloading", out_name, mode, task_id, user_name, user_id) if msg_id else None)
                   s_path = await prep_subtitle(orig_s_path, settings.get("font", "Arial"))
                   
               a_path = None
               if a_id and mode == 'addaudio':
                   a_msg = await app.get_messages(chat_id, int(a_id))
-                  a_path = await app.download_media(a_msg, file_name=f"audio.m4a", progress=make_prog(app, chat_id, msg_id, "Downloading", out_name, mode, task_id, user_name) if msg_id else None)
+                  a_path = await app.download_media(a_msg, file_name=f"audio.m4a", progress=make_prog(app, chat_id, msg_id, "Downloading", out_name, mode, task_id, user_name, user_id) if msg_id else None)
               
               cmd = ['ffmpeg', '-y', '-i', v_path]
               
@@ -283,7 +284,7 @@ jobs:
                               f"Eta: {format_time(eta)}\n"
                               f"Speed: {speed_str}\n"
                               f"Frame: {format_time(curr_sec)}/{format_time(dur)}\n"
-                              f"Task by: {user_name}\n"
+                              f"Task by: [{user_name}](tg://user?id={user_id})\n"
                               f"Cancel: /cancel_{task_id}\n"
                               f"Task id : {task_id}"
                           )
@@ -305,7 +306,7 @@ jobs:
 
               for attempt in range(3):
                   try:
-                      await app.send_document(chat_id, out_name, caption=f"✅ **{out_name}**", file_name=out_name, progress=make_prog(app, chat_id, msg_id, "Uploading", out_name, mode, task_id, user_name) if msg_id else None)
+                      await app.send_document(chat_id, out_name, caption=f"✅ **{out_name}**", file_name=out_name, progress=make_prog(app, chat_id, msg_id, "Uploading", out_name, mode, task_id, user_name, user_id) if msg_id else None)
                       break
                   except Exception:
                       await asyncio.sleep(5)
