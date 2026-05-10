@@ -219,7 +219,11 @@ jobs:
 
                   if wm_type == 'image' and wm_path:
                       x, y = get_wm_coords(wm_pos, is_text=False)
-                      fc = f"movie='wm.png',scale=-1:{wm_size}[wm];[0:v]"
+                      
+                      # FIX: Point to the actual downloaded path (downloads/wm.png)
+                      esc_wm = wm_path.replace("\", "/").replace("'", r"'''").replace(":", r"\:")
+                      
+                      fc = f"movie='{esc_wm}',scale=-1:{wm_size}[wm];[0:v]"
                       if vf_chains: fc += ",".join(vf_chains) + "[vbase];[vbase][wm]overlay="
                       else: fc += "[wm]overlay="
                       fc += f"{x}:{y}"
