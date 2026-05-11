@@ -117,22 +117,27 @@ jobs:
                   return mod_path
               except Exception: return ass_path
 
-          def get_wm_coords(pos, is_text=False):
+          def get_wm_coords(pos, is_text=False, custom_val="10:10"):
+              if pos == 'custom':
+                  parts = str(custom_val).split(':')
+                  if len(parts) == 2: return parts[0], parts[1]
+
               tw = "tw" if is_text else "w"
               th = "th" if is_text else "h"
               W = "w" if is_text else "W"
               H = "h" if is_text else "H"
+              pad = "10"
               
-              if pos == 'top-left': return "10", "10"
-              if pos == 'top-center': return f"({W}-{tw})/2", "10"
-              if pos == 'top-right': return f"{W}-{tw}-10", "10"
-              if pos == 'center-left': return "10", f"({H}-{th})/2"
+              if pos == 'top-left': return pad, pad
+              if pos == 'top-center': return f"({W}-{tw})/2", pad
+              if pos == 'top-right': return f"{W}-{tw}-{pad}", pad
+              if pos == 'center-left': return pad, f"({H}-{th})/2"
               if pos == 'center': return f"({W}-{tw})/2", f"({H}-{th})/2"
-              if pos == 'center-right': return f"{W}-{tw}-10", f"({H}-{th})/2"
-              if pos == 'bottom-left': return "10", f"{H}-{th}-10"
-              if pos == 'bottom-center': return f"({W}-{tw})/2", f"{H}-{th}-10"
-              if pos == 'bottom-right': return f"{W}-{tw}-10", f"{H}-{th}-10"
-              return "10", "10"
+              if pos == 'center-right': return f"{W}-{tw}-{pad}", f"({H}-{th})/2"
+              if pos == 'bottom-left': return pad, f"{H}-{th}-{pad}"
+              if pos == 'bottom-center': return f"({W}-{tw})/2", f"{H}-{th}-{pad}"
+              if pos == 'bottom-right': return f"{W}-{tw}-{pad}", f"{H}-{th}-{pad}"
+              return pad, pad
 
           async def main():
               app = Client("gh_session", api_id=int("${{ inputs.api_id }}"), api_hash="${{ inputs.api_hash }}", bot_token="${{ inputs.bot_token }}")
@@ -213,12 +218,13 @@ jobs:
                   wm_pos = settings.get('wm_pos', 'top-right')
                   wm_size = settings.get('wm_size', '25')
                   
+                  custom_pos = settings.get('wm_custom_pos', '10:10')
                   if wm_type == 'text' and settings.get('wm_text'):
-                      x, y = get_wm_coords(wm_pos, is_text=True)
+                      x, y = get_wm_coords(wm_pos, is_text=True, custom_val=custom_pos)
                       vf_chains.append(f"drawtext=text='{settings['wm_text']}':fontsize={wm_size}:fontcolor=white:x={x}:y={y}")
 
                   if wm_type == 'image' and wm_path:
-                      x, y = get_wm_coords(wm_pos, is_text=False)
+                      x, y = get_wm_coords(wm_pos, is_text=False, custom_val=custom_pos)
                       esc_wm = wm_path.replace("\\", "/").replace("'", r"'''").replace(":", r"\:")
                       
                       if settings.get('wm_rembg'):
