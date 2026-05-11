@@ -223,17 +223,18 @@ jobs:
                       x, y = get_wm_coords(wm_pos, is_text=True, custom_val=custom_pos)
                       vf_chains.append(f"drawtext=text='{settings['wm_text']}':fontsize={wm_size}:fontcolor=white:x={x}:y={y}")
 
+                  # 🟢 MUDASSIR FIX: GitHub Worker Watermark FPS Sync
                   if wm_type == 'image' and wm_path:
+                      cmd.extend(['-i', wm_path])
                       x, y = get_wm_coords(wm_pos, is_text=False, custom_val=custom_pos)
-                      esc_wm = wm_path.replace("\\", "/").replace("'", r"'''").replace(":", r"\:")
                       
                       if settings.get('wm_rembg'):
                           ck_c = settings.get('wm_bg_color', '0x000000')
                           ck_s = settings.get('wm_bg_sim', '0.1')
                           ck_b = settings.get('wm_bg_blend', '0.1')
-                          fc = f"movie='{esc_wm}',colorkey={ck_c}:{ck_s}:{ck_b},scale=-1:{wm_size}[wm];[0:v]"
+                          fc = f"[1:v]colorkey={ck_c}:{ck_s}:{ck_b},scale=-1:{wm_size}[wm];[0:v]"
                       else:
-                          fc = f"movie='{esc_wm}',scale=-1:{wm_size}[wm];[0:v]"
+                          fc = f"[1:v]scale=-1:{wm_size}[wm];[0:v]"
                           
                       if vf_chains: fc += ",".join(vf_chains) + "[vbase];[vbase][wm]overlay="
                       else: fc += "[wm]overlay="
@@ -254,6 +255,11 @@ jobs:
                       cmd += ['-c:v', 'libx264', '-preset', preset, '-crf', crf]
                       if ac == 'copy': cmd += ['-c:a', 'copy']
                       else: cmd += ['-c:a', ac, '-b:a', settings.get('audio_bitrate', '128k')]
+                      
+                      # 🟢 MUDASSIR FIX: GitHub Worker Remove Softsubs logic
+                      if settings.get('remove_softsubs', False):
+                          cmd += ['-sn']
+                          
                       cmd += [out_name]
               
               if msg_id: await app.edit_message_text(chat_id, msg_id, f"File name:- **{out_name}**\nEncoding :- [░░░░░░░░░░] 0.0%\nSpecs: {mode.upper()} | {res_val}{hidden_id}")
